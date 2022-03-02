@@ -1,0 +1,17 @@
+digraph {
+	S [label=PS]
+	C [label=PC]
+	B [label=BP]
+	P [label=PT]
+	D [label=D]
+	T [label=AT]
+	X [label=X]
+	A [label=A]
+	S -> C
+	S -> B
+	C -> P
+	B -> D
+	P -> T
+	P -> X
+	T -> A
+}

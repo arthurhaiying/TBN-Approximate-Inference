@@ -1,0 +1,10 @@
+digraph {
+	node [fixedsize=true shape=circle width=0.5]
+	A [shape=doublecircle]
+	B
+	C
+	E
+	A -> B
+	A -> C
+	B -> E
+}
