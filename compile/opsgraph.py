@@ -42,7 +42,7 @@ class Var:
 
 class OpsGraph:
 
-    cpt_types  = ('cpt','cpt1','cpt2')
+    cpt_types  = ('cpt','cpt1','cpt2','cpt3')
     op_types   = ('m','p','mp','n','s','c')
     
     def __init__(self,trainable,testing,testing_by_evd):
@@ -220,12 +220,12 @@ class OpsGraph:
         self.ops.append(op)
         return op
 
-    """ Add op that create tensors for selecting cpt directly based on evidence instantiations
+    """ Add op that create tensors for testing cpt directly based on evidence 
         TODO: do we need to tie test CPT ops?
     """
     # assumes   (1) cpt matches orders of tbn nodes in family
     #           (2) the order of evidence_ops matches evid_nodes
-    def add_tested_cpt_op(self,node,cpt,evd_nodes,evidence_ops):
+    def add_tested_cpt_op(self,node,cpt,enodes,evidence_ops):
         assert isinstance(cpt, ndarray)
         assert node.testing_by_evd
         assert node not in self.selected_cpt_ops
@@ -234,12 +234,51 @@ class OpsGraph:
         family    = node.family
         vars      = self.nodes2vars(family,add_batch=True)
         var       = vars[-1]            # dimension of var
-        evd_vars  = self.nodes2vars_unsorted(evd_nodes,add_batch=False)
+        evars  = self.nodes2vars_unsorted(enodes,add_batch=False)
         assert node.id == var.id 
         # create test CPT op 
-        test_cpt_op = ops.TestCPTOpFactory().get()
-        op = test_cpt_op(var,cpt,evd_vars,evidence_ops,vars)
-        op.set_cpt_label(node.test_cpt_label) # cpt parameter names are created during opsgraph execution
+        test_cpt_op_init = ops.TestCPTOpFactory().get()
+        op = test_cpt_op_init(var,cpt,evars,evidence_ops,vars)
+        op.set_cpt_label(node.cpt_label['cpt']) # cpt parameter names are created during opsgraph execution
+        self.ops.append(op)
+        return op
+
+    """ Add op that create tensors for testing cpt based on evidence using two base CPTs """
+    def add_tested_bi_cpt_op(self,node,cpt1_op,cpt2_op,enodes,evidence_ops):
+        assert isinstance(cpt1_op,ops.CptOp) and isinstance(cpt2_op,ops.CptOp)
+        assert all(isinstance(op, ops.EvidenceOp) for op in evidence_ops)
+        assert node.testing_by_evd and node.num_cpts == 2
+        assert node not in self.selected_cpt_ops
+        self.selected_cpt_ops.add(node)
+        # build vars
+        family    = node.family
+        vars      = self.nodes2vars(family,add_batch=True)
+        var       = vars[-1]            # dimension of var
+        evars  = self.nodes2vars_unsorted(enodes,add_batch=False)
+        assert node.id == var.id 
+        # create test_bi_cpt op
+        op = ops.Linear_Test_Bi_CPTOp(var,cpt1_op,cpt2_op,evars,evidence_ops,vars)
+        op.set_cpt_label(node.cpt_label['cpt'])
+        self.ops.append(op)
+        return op
+
+
+    """ Add op that create tensors for testing cpt based on evidence using N base CPTs """
+    def add_tested_n_cpt_op(self,node,cpt_ops,enodes,evidence_ops):
+        assert all(isinstance(op, ops.CptOp) for op in cpt_ops)
+        assert all(isinstance(op, ops.EvidenceOp) for op in evidence_ops)
+        assert node.testing_by_evd and node.num_cpts > 2
+        assert node not in self.selected_cpt_ops
+        self.selected_cpt_ops.add(node)
+        # build vars
+        family    = node.family
+        vars      = self.nodes2vars(family,add_batch=True)
+        var       = vars[-1]            # dimension of var
+        evars  = self.nodes2vars_unsorted(enodes,add_batch=False)
+        assert node.id == var.id 
+        # create test_n_cpt op
+        op = ops.Linear_Test_N_CPTOp(var,cpt_ops,evars,evidence_ops,vars)
+        op.set_cpt_label(node.cpt_label['cpt'])
         self.ops.append(op)
         return op
         
@@ -322,7 +361,7 @@ class OpsGraph:
             elif  op_type == ops.NormalizeOp: nc  += 1
             elif  op_type == ops.ScaleOp:     scc += 1
             elif  op_type == ops.SelectCptOp: sec += 1
-            elif  isinstance(op, ops.TestCPTOp):   tec += 1
+            elif  isinstance(op, ops.TestCPTOpBase):   tec += 1
             elif  op_type == ops.RefCptOp:    rc  += 1
             elif  op_type == ops.EvidenceOp:  ec  += 1
             elif  op_type == ops.FixedCptOp:  fc  += 1
@@ -335,6 +374,5 @@ class OpsGraph:
                  f'    cpt trained {tc}, fixed {fc}, reference {rc}, selection {sec}, test {tec}\n'
                  f'    evidence {ec}'
                  #f'\n    cache lookups {self.lookups}, hits {self.hits}, rate {rate:.1f}%'
-                 #f'     '
                  )
         print(stats)

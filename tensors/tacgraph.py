@@ -368,16 +368,19 @@ class TacGraph:
         self.update_lr = update_lr 
         self.reset_optimizer()
         
+        
         # initial cpt weights are set to 0 (uniform cpt)
         for w in self.cpt_weights:
             value = np.zeros(w.shape)
             w.assign(value)
 
+        """
         # initial test cpt weights are randomly assigned
         for w in self.test_cpt_weights:
             mean, stddev = 0.0, 0.001
             value = np.random.normal(mean,stddev,size=w.shape)
             w.assign(value)
+        """
                                
         self.training_ongoing = True
             
@@ -446,14 +449,17 @@ class TacGraph:
             return [random_normal_cpt(shape,size,index+i*size) for i in range(card)]
         
         # for test cpt weights
-        def random_normal_test_cpt(shape,index=0):
-            t_mean, t_stddev = 0.0, 0.001
-            seed = [index,global_seed]
-            weight = tf.random.stateless_normal(shape,mean=t_mean,stddev=t_stddev,
-                        seed=seed,dtype=p.float)
+        def random_uniform_weight(shape):
+            card = shape[-1]
+            bound = np.sqrt(1.0/card)
+            weight = tf.random.uniform(shape,-bound,bound)
+            return weight.numpy()
+
+        def random_uniform_bias(shape):
+            bound = 0.00001
+            weight = tf.random.uniform(shape,-bound,bound)
             return weight.numpy()
             
-                            
         for i, w in enumerate(self.cpt_weights):    
             # method 1: uniform cpt
             # weights of each cpt distribution are equal (but random)
@@ -463,9 +469,15 @@ class TacGraph:
             value = random_normal_cpt(w.shape,tf.size(w)/w.shape[-1])
             w.assign(value)
 
-        for i,w in enumerate(self.test_cpt_weights):
-            value = random_normal_test_cpt(w.shape,index=i)
-            w.assign(value)
+        for label, w in zip(self.test_cpt_labels,self.test_cpt_weights):
+            name = label.split(':')[-1]
+            assert name in ('weight','bias')
+            if name == 'weight':
+                value = random_uniform_weight(w.shape)
+                w.assign(value)
+            elif name == 'bias':
+                value = random_uniform_bias(w.shape)
+                w.assign(value)
 
         """
         print('\nweights')

@@ -67,7 +67,17 @@ def __apply(node,fn):
         node._cpt2 = fn(node.cpt2,'cpt2')
     else:
         node._cpt  = fn(node.cpt,'cpt')
-        
+
+# apply various transformations to TestNode cpts
+def __apply2(node,fn):
+    if node.num_cpts == 1:
+        node._cpt = fn(node.cpt,'cpt')
+    else: # node.num_cpts >= 2:
+        for i in range(node.num_cpts):
+            type = f"cpt{i+1}"
+            cpt = node.cpts[i]
+            node._cpts[i] = fn(cpt,type)
+
 # -expands node cpts into np.ndarray: from nested list, np arrays or python functions
 # -python function may specify a functional cpt or a constraint cpt
 # -prunes impossible values of node
@@ -130,6 +140,67 @@ def set_cpts(node):
         assert check(node.cpt1) and check(node.cpt2)
     else:
         assert check(node.cpt)
+
+# set cpts for TestNode
+def set_cpts2(node):
+
+    # cpt transformations
+    def fn1(cpt,cpt_type):
+        cpt, tabular = expand(node,cpt,cpt_type)
+        if tabular:
+            return __prune_rows(node,cpt)
+        return cpt
+    def fn2(cpt,cpt_type):
+        return __prune_distributions(node,cpt)
+    def fn3(cpt,cpt_type):
+        axes = tuple(i for i,p in enumerate(node.parents) if p.card==1)
+        return np.squeeze(cpt,axis=axes)
+    def fn4(cpt,cpt_type):
+        return np.array([1.])
+    
+    # STEP 1: expand cpt and prune its rows
+    # -expand cpts into np arrays
+    # -prune cpt rows which correspond to infeasible instantiations of parents
+    # -infeasible rows of cpts expanded from python functions already pruned
+    __apply2(node,fn1)
+
+    # STEP 2: prune node values and distributions
+    # -prune node values: ones that are guaranteed to always have zero probability
+    # -zeros of a cpt need to be fixed if used for inferring impossible values
+    if node.fixed_cpt or node.fixed_zeros:
+        did_prune = __prune_values(node)
+        # if node lost values, prune the distributions of its cpts
+        if did_prune: __apply(node,fn2)
+       
+    # STEP 3: disconnect node from some parents
+    # -if we have single-value parents, remove corresponding (trivial) axes from cpts
+    # -this corresponds to deleting network edges outgoing from these parents
+    if any(p.card==1 for p in node.parents):
+        __apply(node,fn3) # before pruning parents
+        node._parents = [p for p in node.parents if p.card > 1]
+        node._family  = [*node.parents,node]
+
+    # STEP 4: disconnect node from all parents
+    # if node has single value, disconnect it from parents (node independent of parents)
+    if node.card==1 and node.parents: 
+        __apply(node,fn4)
+        node._parents = []     
+        node._family  = [node]
+        
+    # children of parents need not be updated in STEPS 3 & 4 since the node has not
+    # been added yet to the network (children of parents are set when adding the node)
+        
+    # sanity checks
+    check = lambda cpt: type(cpt) is np.ndarray and cpt.shape == node.shape() and \
+                np.allclose(1.,np.sum(cpt,axis=-1)) # normalized
+    if node.num_cpts == 1:
+        check(node.cpt)
+    else: 
+        for i in range(node.num_cpts):
+            check(node.cpts[i])
+
+
+
             
 # prunes values of node that are guaranteed to have a zero probability under
 # any feasible instantiation of its parents

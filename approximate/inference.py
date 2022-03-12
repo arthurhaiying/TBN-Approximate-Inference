@@ -366,10 +366,9 @@ def make_testing_scheme2(bn, T, evidence):
 def make_testing_scheme1(bn, T, evidence):
     # naive: make every non-root nodes testing 
     # TODO: testing order
-    dag = get_dag(bn)
-    nodes = dag.keys()
-    inDegrees = {x:0 for x in dag.keys()}
-    for x, chilren in dag.items():
+    nodes = T.keys()
+    inDegrees = {x:0 for x in T.keys()}
+    for x, chilren in T.items():
         for c in chilren:
             inDegrees[c]+=1
     roots = [x for x,degree in inDegrees.items() if degree == 0]
@@ -378,10 +377,12 @@ def make_testing_scheme1(bn, T, evidence):
     return sel_evidence_dict
 
 
-def make_incomplete_tbn(bn, T, clusters, evidence, Q, testing_type='testing'):
+def make_incomplete_tbn(bn, T, clusters, evidence, Q, testing_type='testing', num_cpts=None):
     testing_types = ('testing', 'testing_by_evd')
     if testing_type not in testing_types:
         raise ValueError(f"testing type {testing_type} is not valid")
+    if testing_type == 'testing_by_evd' and num_cpts is None:
+        raise ValueError(f"num_cpts should be provided for testing_by_evd")
 
     tbn = TBN("incomplete tbn")
     name2node = {}
@@ -403,7 +404,11 @@ def make_incomplete_tbn(bn, T, clusters, evidence, Q, testing_type='testing'):
             pnames2 = [p.name for p in parents2]
             cpt2 = make_reduced_cpt(cpt, pnames1, pnames2)
             if x in testing:
-                node2 = Node(x, values=values, parents=parents2, testing=True, cpt=cpt2)
+                try:
+                    node2 = Node(x, values=values, parents=parents2, testing=True, cpt=cpt2)
+                except:
+                    print(f"Testing Node {x} has parents {parents2}")
+                    exit(1)
             else:
                 node2 = Node(x, values=values, parents=parents2, cpt=cpt2)
             name2node[x] = node2
@@ -421,7 +426,7 @@ def make_incomplete_tbn(bn, T, clusters, evidence, Q, testing_type='testing'):
             pnames2 = [p.name for p in parents2]
             cpt2 = make_reduced_cpt(cpt, pnames1, pnames2)
             if x in testing:
-                node2 = TestNode(x, values=values, parents=parents2, cpt=cpt2)
+                node2 = TestNode(x, values=values, parents=parents2, num_cpts=num_cpts, cpt=cpt2)
             else:
                 node2 = Node(x, values=values, parents=parents2, cpt=cpt2)
             name2node[x] = node2
@@ -468,24 +473,27 @@ def evaluate(bn, evidence, Q, tac_list):
 
 
 def main(sample_size):
-    net_filepath = "approximate/networks/alarm.net"
-    data_filename = "alarm.csv"
+    net_filepath = "approximate/networks/barley.net"
+    data_filename = "barley.csv"
     bn = NetParser.parseBN(net_filepath)
     dag = get_dag(bn)
-    Q = "BP"
+    Q = "protein"
     evidence = [x for x,children in dag.items() if len(children)==0 and x != Q]
     ecards = [len(bn.node(e).values) for e in evidence]
     qcard = len(bn.node(Q).values)
     print(f"evidence: {evidence} Q: {Q}")
     # step 1: build incomplete bn / tbn 
     T, clusters = make_natural_join_tree2(bn, trim=True)
+    dot(T, name="incomplete barley", view=True)
     incomplete_bn = make_incomplete_bn(bn, T)
     incomplete_tbn1 = make_incomplete_tbn(bn, T, clusters, evidence, Q, testing_type='testing')
-    incomplete_tbn2 = make_incomplete_tbn(bn, T, clusters, evidence, Q, testing_type='testing_by_evd')
+    #incomplete_tbn2 = make_incomplete_tbn(bn, T, clusters, evidence, Q, testing_type='testing_by_evd',num_cpts=1)
+    incomplete_tbn3 = make_incomplete_tbn(bn, T, clusters, evidence, Q, testing_type='testing_by_evd',num_cpts=3)
     # step 2: compile incomplete ac/tac from incomplete bn / tbn
     ac = TAC(incomplete_bn, inputs=evidence, output=Q, trainable=True)
     tac1 = TAC(incomplete_tbn1, inputs=evidence, output=Q, trainable=True)
-    tac2 = TAC(incomplete_tbn2, inputs=evidence, output=Q, trainable=True)
+    #tac2 = TAC(incomplete_tbn2, inputs=evidence, output=Q, trainable=True)
+    tac3 = TAC(incomplete_tbn3, inputs=evidence, output=Q, trainable=True)
     # step 3: sample data from true bn
     data, order = direct_sample_and_save_mp(bn, sample_size)
     evidences, marginals = split_data(data, order, evidence, Q)
@@ -494,9 +502,10 @@ def main(sample_size):
     # step 4: fit incomplete ac / tac
     ac.fit(evidences, marginals, loss_type='CE',metric_type='CE')
     tac1.fit(evidences, marginals, loss_type='CE',metric_type='CE')
-    tac2.fit(evidences, marginals, loss_type='CE',metric_type='CE')
-    tac_types = ['ac', 'tac1', 'tac2']
-    tac_list = [ac, tac1, tac2]
+    #tac2.fit(evidences, marginals, loss_type='CE',metric_type='CE')
+    tac3.fit(evidences, marginals, loss_type='CE',metric_type='CE')
+    tac_types = ['ac', 'tac1','tac3']
+    tac_list = [ac, tac1,tac3]
     loss_list = evaluate(bn, evidence, Q, tac_list)
     np.set_printoptions(precision=3)
     print("KL loss ------------------------ ")

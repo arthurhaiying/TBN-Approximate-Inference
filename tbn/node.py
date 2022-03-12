@@ -13,7 +13,7 @@ A node must be constructed after its parents have been constructed.
 class Node:
     
     ID        = count() # for generating node IDs
-    cpt_types = ('cpt','cpt1','cpt2','test_cpt')
+    cpt_types = ('cpt','cpt1','cpt2') # TODO: Node can have any number of CPTs now
     
     # user attributes are ones that can be specified by the user when constructing node
     user_attributes = ('name','values','parents','testing','fixed_cpt','fixed_zeros',
@@ -121,7 +121,6 @@ class Node:
 
         # select cpt directly based on evidence
         self._testing_by_evd = False
-        self._sel_evidence   = None
 
     
     # for sorting
@@ -166,14 +165,11 @@ class Node:
     @property
     def cpt_label(self):   return self._cpt_label
     @property
-    def test_cpt_label(self):   return self._test_cpt_label
-    @property
     def tbn(self):         return self._tbn
 
     @property
     def testing_by_evd(self):     return self._testing_by_evd
-    @property
-    def sel_evidence(self):        return self._sel_evidence
+    
     
     
     """ public functions """
@@ -297,7 +293,6 @@ class Node:
         # the following attributes will be updated next
         self._all01_cpt  = None  # whether cpt is 0/1 (not applicable for testing nodes)
         self._cpt_label  = None  # for saving to file (updated when processing cpts)
-        self._test_cpt_label = None # for saving TestCPT to file
         
         # identify 0/1 cpts
         if self.testing:
@@ -318,8 +313,6 @@ class Node:
             self._cpt_tie = f'{self.cpt_tie}__{self.shape()}'
             
         self.__set_cpt_labels()
-        if self.testing_by_evd:
-            self.__set_test_cpt_labels()
         
         # we need to sort parents & family and also adjust the cpt accordingly
         # this must be done after processing cpts which may prune parents
@@ -373,10 +366,3 @@ class Node:
         else:
             set_label(self.cpt,'cpt')
 
-    # set test cpt labels for saving Test CPT to file
-    def __set_test_cpt_labels(self):
-        assert self.testing_by_evd
-        parents_str    = u.unpack(self.parents,'name')
-        evidences_str  = u.unpack(self.sel_evidence,'name')
-        label = f'Test CPT: {self.name} | {parents_str}, {evidences_str}'
-        self._test_cpt_label = label

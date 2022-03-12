@@ -138,8 +138,26 @@ def __tested_cpt(var,qcontext,jt,og):
     assert jt.lookup_test_cpt_op(var) is None
 
     evars = var.sel_evidence  
-    evidence_ops  = [jt.get_evd_op(v) for v in evars] # lookup evidence ops
-    test_cpt_op = og.add_tested_cpt_op(var,var.cpt,evars,evidence_ops) # select CPT from evidences
+    evidence_ops  = [jt.get_evd_op(evar) for evar in evars] # lookup evidence ops
+
+    # add test cpt op 
+    if var.num_cpts == 1:
+        test_cpt_op = og.add_tested_cpt_op(var,var.cpt,evars,evidence_ops) 
+    elif var.num_cpts == 2:
+        cpt1_op = og.add_cpt_op(var,var.cpt1,'cpt1')
+        cpt2_op = og.add_cpt_op(var,var.cpt2,'cpt2')
+        test_cpt_op = og.add_tested_bi_cpt_op(var,cpt1_op,cpt2_op,evars,evidence_ops)
+    elif var.num_cpts > 2:
+        cpt_ops = []
+        for i in range(var.num_cpts):
+            label = f"cpt{i+1}"
+            cpt = var.cpts[i]
+            op = og.add_cpt_op(var,cpt,label)
+            cpt_ops.append(op)
+        test_cpt_op = og.add_tested_n_cpt_op(var,cpt_ops,evars,evidence_ops)
+    else:
+        raise ValueError(f"num_cpts of node {var.name} is not valid: {var.num_cpts}")
+
     jt.save_test_cpt_op(var,test_cpt_op) # cache it, looked up by __cpt_evd() for next inference
                 
 

@@ -118,11 +118,11 @@ class Op:
                 cpt_weights.append(op.cpt_weight)
                 fixed_01_count += op.fixed_01_count
             
-            elif isinstance(op, TestCPTOp):
+            elif isinstance(op, TestCPTOpBase):
                 op.execute()
                 for name,weight in op.parameters():
                     cpt_label = op.cpt_label
-                    ops_graph.test_cpt_labels.append(cpt_label+": "+name)
+                    ops_graph.test_cpt_labels.append(cpt_label+":"+name)
                     test_cpt_weights.append(weight)
             # elif op.static:
             # op.execute()
@@ -141,7 +141,7 @@ class Op:
             if type(op) is EvidenceOp: continue # already executed
             elif type(op) is TrainCptOp: # already executed and created weight variables
                 op.build_cpt_tensor()    # we now need to assemble weights into a cpt 
-            elif isinstance(op, TestCPTOp):  # already executed and created CPT model weights
+            elif isinstance(op, TestCPTOpBase):  # already executed and created CPT model weights
                 op.build_cpt_tensor()    # apply CPT model   
             else: 
                 op.execute()           # will not create variables
@@ -172,7 +172,6 @@ class Op:
     # ensures a unique tensor per cpt
     def get_cpt_tensor(cpt):
         shape = cpt.shape
-        
         if shape in Op.cpt_cache:
             cpt_likes = Op.cpt_cache[shape]
         else:
@@ -593,39 +592,48 @@ class EvidenceOp(Op):
 # select CPTs directly based on fed evidence instantiations
 #############################################################################
 
-""" Construct tensors representing selecting cpt of a node directly based on evidences """
-class TestCPTOp(Op):
+class TestCPTOpBase(Op):
+    """ abstract base for testCPTOp """
+    def execute(self):
+        pass
+    def build_cpt_tensor(self):
+        pass
+    def parameters(self):
+        pass
 
-    def __init__(self,var,cpt,evd_vars,evidence_ops,vars):
-        Op.__init__(self,evidence_ops,vars)
+""" Construct tensors representing tested cpt of a node directly based on evidence """
+class TestCPTOp(TestCPTOpBase):
+
+    def __init__(self,var,cpt,evars,evidences,vars):
+        Op.__init__(self,evidences,vars)
         self.static      = False
         self.var         = var
         self.dims        = d.get_dims(vars)
         self.label       = 'test_cpt_%s_%s' % (var.name,self.strvars)
-        self.evd_vars    = evd_vars
+        self.evars       = evars
         self.cpt         = cpt    # original CPT may be used in the futre
         self.cpt_label   = None   # for saving test cpt parameters
         self._parameters = {}     # test cpt parameters
 
-    def parameters(self):
-        return self._parameters.items()
-
     def set_cpt_label(self,label):
         self.cpt_label = label
+
+    def parameters(self):
+        return self._parameters.items()
 
     
 class LinearTestCPTOp1(TestCPTOp):
     """ linear map from evidence """
 
-    def __init__(self,var,cpt,evd_vars,evidence_ops,vars):
-        TestCPTOp.__init__(self,var,cpt,evd_vars,evidence_ops,vars)
-        self.cpt_weight = None # trainable tf variable (weights)
+    def __init__(self,var,cpt,evars,evidences,vars):
+        TestCPTOp.__init__(self,var,cpt,evars,evidences,vars)
+        self.cpt_weight = None 
 
     # create CPT weights
     def execute(self):
         name   = 'weight'
         dtype  = p.float
-        ecards = sum(evar.card for evar in self.evd_vars)
+        ecards = sum(evar.card for evar in self.evars)
         shape  = self.cpt.shape+(ecards,)
         # initialize cpt weights randomly
         mean, stddev = 0.0, 0.001
@@ -641,12 +649,12 @@ class LinearTestCPTOp1(TestCPTOp):
     # linear map from concatenated one-hot evidence vector
     def build_cpt_tensor(self):
         inputs = self.inputs
-        evidence = [i.tensor for i in inputs]
+        evidences = [i.tensor for i in inputs]
         weight = self.cpt_weight
         with tf.name_scope(self.label):
-            evidence = tf.concat(evidence, axis=1) 
+            evidences = tf.concat(evidences, axis=1) 
             # tested_cpt[N,U,X] = sum_E evidence[N,E] * weight[U,X,E]
-            cpt = tf.tensordot(evidence, weight, axes=[[-1],[-1]]) 
+            cpt = tf.tensordot(evidences, weight, axes=[[-1],[-1]]) 
             cpt = tf.math.softmax(cpt, axis=-1) # normalize
             self.tensor = cpt
 
@@ -654,110 +662,258 @@ class LinearTestCPTOp1(TestCPTOp):
 class LinearTestCPTOp2(TestCPTOp):
     """ linear map from evidence with bias """
 
-    def __init__(self,var,cpt,evd_vars,evidence_ops,vars):
-        TestCPTOp.__init__(self,var,cpt,evd_vars,evidence_ops,vars)
-        self.cpt_weight = None # trainable tf variable (weights)
-        self.cpt_bias   = None # trainable tf variable (bias)
+    def __init__(self,var,cpt,evars,evidences,vars):
+        TestCPTOp.__init__(self,var,cpt,evars,evidences,vars)
+        self.cpt_weight = None 
+        self.cpt_bias   = None 
 
     # create CPT weights
     def execute(self):
         # initilaize CPT weight 
-        w_name   = 'weight'
+        name     = 'weight'
         dtype    = p.float
-        ecards   = sum(evar.card for evar in self.evd_vars)
+        ecards   = sum(evar.card for evar in self.evars)
         w_shape  = self.cpt.shape+(ecards,) # shape (U,X,E)
         mean, stddev = 0.0, 0.001
         w_value = tf.random.normal(w_shape,mean=mean,stddev=stddev)
         with tf.name_scope(self.label):
             weight = tf.Variable(initial_value=w_value,trainable=True,
-                        shape=w_shape,dtype=dtype,name=w_name) 
+                        shape=w_shape,dtype=dtype,name=name) 
         self.cpt_weight = weight
-        self._parameters[w_name] = weight
+        self._parameters[name] = weight
 
         # initialize CPT bias
-        b_name  = 'bias'
-        dtype   = p.float
+        name    = 'bias'
         b_shape = self.cpt.shape # shape (U,X)
         b_value = tf.zeros(b_shape)
         with tf.name_scope(self.label):
             bias = tf.Variable(initial_value=b_value,trainable=True,
-                        shape=b_shape,dtype=dtype,name=b_name) 
+                        shape=b_shape,dtype=dtype,name=name) 
         self.cpt_bias = bias
-        self._parameters[b_name] = bias
+        self._parameters[name] = bias
         return self._parameters
         
     # build cpt tensor from fed evidence instantiations
     # linear map from concatenated one-hot evidence vector
     def build_cpt_tensor(self):
         inputs = self.inputs
-        evidence = [i.tensor for i in inputs]
+        evidences = [i.tensor for i in inputs]
         weight = self.cpt_weight
         bias = self.cpt_bias
         with tf.name_scope(self.label):
-            evidence = tf.concat(evidence, axis=1) 
+            evidences = tf.concat(evidences, axis=1) 
             # tested_cpt[N,U,X] = sum_E evidence[N,E] * weight[U,X,E]
-            cpt = tf.tensordot(evidence, weight, axes=[[-1],[-1]]) 
+            cpt = tf.tensordot(evidences, weight, axes=[[-1],[-1]]) 
             cpt = tf.add(cpt, bias)
             cpt = tf.math.softmax(cpt, axis=-1) # normalize
             self.tensor = cpt
-
-
 
 
 class LinearTestCPTOpOnlyBias(TestCPTOp):
     """ linear map from evidence with only bias for sanity check """
 
-    def __init__(self,var,cpt,evd_vars,evidence_ops,vars):
-        TestCPTOp.__init__(self,var,cpt,evd_vars,evidence_ops,vars)
-        self.cpt_weight = None # trainable tf variable (weights)
-        self.cpt_bias   = None # trainable tf variable (weights)
+    def __init__(self,var,cpt,evars,evidences,vars):
+        TestCPTOp.__init__(self,var,cpt,evars,evidences,vars)
+        self.cpt_weight = None 
+        self.cpt_bias   = None 
 
     # create CPT weights
     def execute(self):
         # initilaize CPT weight 
-        w_name   = 'weight'
+        name     = 'weight'
         dtype    = p.float
-        ecards   = sum(evar.card for evar in self.evd_vars)
+        ecards   = sum(evar.card for evar in self.evars)
         w_shape  = self.cpt.shape+(ecards,) # shape (U,X,E)
         #w_value = tf.random.normal(w_shape,mean=mean,stddev=stddev)
         with tf.name_scope(self.label):
-            weight = tf.constant(0.,shape=w_shape,dtype=dtype,name=w_name) 
+            weight = tf.constant(0.,shape=w_shape,dtype=dtype,name=name) 
         self.cpt_weight = weight
-        #self._parameters[w_name] = weight
+        #self._parameters[name] = weight
 
         # initialize CPT bias
-        b_name  = 'bias'
-        dtype   = p.float
+        name    = 'bias'
         b_shape = self.cpt.shape # shape (U,X)
         b_value = tf.zeros(b_shape)
         with tf.name_scope(self.label):
             bias = tf.Variable(initial_value=b_value,trainable=True,
-                        shape=b_shape,dtype=dtype,name=b_name) 
+                        shape=b_shape,dtype=dtype,name=name) 
         self.cpt_bias = bias
-        self._parameters[b_name] = bias
+        self._parameters[name] = bias
         return self._parameters
         
     # build cpt tensor from fed evidence instantiations
     # linear map from concatenated one-hot evidence vector
     def build_cpt_tensor(self):
         inputs = self.inputs
-        evidence = [i.tensor for i in inputs]
+        evidences = [i.tensor for i in inputs]
         weight = self.cpt_weight
         bias = self.cpt_bias
         with tf.name_scope(self.label):
-            evidence = tf.concat(evidence, axis=1) 
+            evidences = tf.concat(evidences, axis=1) 
             # tested_cpt[N,U,X] = sum_E evidence[N,E] * weight[U,X,E]
-            cpt = tf.tensordot(evidence, weight, axes=[[-1],[-1]]) 
+            cpt = tf.tensordot(evidences, weight, axes=[[-1],[-1]]) 
             cpt = tf.add(cpt, bias)
             cpt = tf.math.softmax(cpt, axis=-1) # normalize
             self.tensor = cpt
 
 
-class Test_Bi_CPT_Op(Op):
-    pass
 
-class Test_N_CPT_Op(Op):
-    pass
+""" Construct tensors representing tested cpt of a node based on evidence 
+    and two base CPTs """
+class Test_Bi_CPTOp(TestCPTOpBase):
+    
+    def __init__(self,var,cpt1,cpt2,evars,evidences,vars):
+        inputs = [cpt1,cpt2,evidences]
+        Op.__init__(self,inputs,vars)
+        self.static      = False
+        self.var         = var
+        self.dims        = d.get_dims(vars)
+        self.label       = 'test_bi_cpt_%s_%s' % (var.name,self.strvars)
+        self.evars       = evars
+        self.num_cpts    = 2
+        self.cpt_label   = None   # for saving test cpt parameters
+        self._parameters = {}     # test cpt parameters
+
+    def set_cpt_label(self,label):
+        self.cpt_label = label
+
+    def parameters(self):
+        return self._parameters.items()
+
+
+class Linear_Test_Bi_CPTOp(Test_Bi_CPTOp):
+    """ Linear combination of two base CPTs where weights are computed from evidence using linear map """
+
+    def __init__(self,var,cpt1,cpt2,evars,evidences,vars):
+        Test_Bi_CPTOp.__init__(self,var,cpt1,cpt2,evars,evidences,vars)
+        self.weight = None
+        self.bias   = None
+
+    # create CPT weights
+    def execute(self):
+        # initialize weights
+        name     = 'weight'
+        dtype    = p.float
+        num_cpts = 2 
+        ecards   = sum(evar.card for evar in self.evars)
+        bound    = np.sqrt(1.0/ecards)
+        w_shape  = (ecards,num_cpts)
+        w_value  = tf.random.uniform(w_shape, -bound, bound)
+        with tf.name_scope(self.label):
+            weight = tf.Variable(initial_value=w_value,trainable=True,
+                        shape=w_shape,dtype=dtype,name=name)
+        self.weight = weight
+        self._parameters[name] = weight
+
+        # initialize bias
+        name    = 'bias'
+        b_shape = (num_cpts,)
+        b_value = tf.zeros(b_shape)
+        with tf.name_scope(self.label):
+            bias = tf.Variable(initial_value=b_value,trainable=True,
+                        shape=b_shape,dtype=dtype,name=name)
+        self.bias = bias
+        self._parameters[name] = bias
+        return self._parameters
+
+    # build cpt tensor from evidence 
+    # first compute scores of two cpts using linear map from evidence instantiations
+    # tested cpt is linear combination of two cpts and scores
+    def build_cpt_tensor(self):
+        print("build test_bi_cpt_op")
+        i1, i2, i3 = self.inputs
+        cpt1, cpt2 = i1.tensor, i2.tensor
+        evidences = [i.tensor for i in i3]
+        weight = self.weight
+        bias = self.bias
+        with tf.name_scope(self.label):
+            evidences = tf.concat(evidences, axis=1) 
+            scores = tf.matmul(evidences, weight) + bias 
+            scores = tf.math.softmax(scores, axis=-1) # shape (N,2)
+            cpts = tf.stack([cpt1,cpt2]) # shape (2,U,X)
+            cpt = tf.tensordot(scores, cpts, axes=1)
+            self.tensor = cpt
+
+
+
+
+""" Construct tensors representing tested cpt of a node based on evidence 
+    and N base CPTs """
+class Test_N_CPTOp(TestCPTOpBase):
+
+    def __init__(self,var,cpts,evars,evidences,vars):
+        inputs = [cpts,evidences]
+        Op.__init__(self,inputs,vars)
+        self.static      = False
+        self.var         = var
+        self.dims        = d.get_dims(vars)
+        self.label       = 'test_n_cpt_%s_%s' % (var.name,self.strvars)
+        self.evars    = evars
+        self.num_cpts    = len(cpts) # num of base cpts
+        self.cpt_label   = None      # for saving test cpt parameters
+        self._parameters = {}        # test cpt parameters
+
+    def set_cpt_label(self,label):
+        self.cpt_label = label
+
+    def parameters(self):
+        return self._parameters.items()
+
+
+class Linear_Test_N_CPTOp(Test_N_CPTOp):
+    """ Linear combination of N CPTs where weights are computed from evidence using linear map """
+
+    def __init__(self,var,cpts,evars,evidences,vars):
+        Test_N_CPTOp.__init__(self,var,cpts,evars,evidences,vars)
+        self.weight = None
+        self.bias   = None
+
+    # create CPT weights
+    def execute(self):
+        # initialize weights
+        name     = 'weight'
+        dtype    = p.float
+        num_cpts = self.num_cpts
+        ecards   = sum(evar.card for evar in self.evars)
+        bound    = np.sqrt(1.0/ecards)
+        w_shape  = (ecards,num_cpts)
+        w_value  = tf.random.uniform(w_shape, -bound, bound)
+        with tf.name_scope(self.label):
+            weight = tf.Variable(initial_value=w_value,trainable=True,
+                        shape=w_shape,dtype=dtype,name=name)
+        self.weight = weight
+        self._parameters[name] = weight
+
+        # initialize bias
+        name    = 'bias'
+        b_shape = (num_cpts,)
+        b_value = tf.zeros(b_shape)
+        with tf.name_scope(self.label):
+            bias = tf.Variable(initial_value=b_value,trainable=True,
+                        shape=b_shape,dtype=dtype,name=name)
+        self.bias = bias
+        self._parameters[name] = bias
+        return self._parameters
+
+    # build cpt tensor from evidence 
+    # first compute scores of cpts using linear map from evidence instantiations
+    # tested cpt is linear combination of N cpts and scores
+    def build_cpt_tensor(self):
+        i1, i2 = self.inputs
+        cpts = [i.tensor for i in i1]
+        evidences = [i.tensor for i in i2]
+        weight = self.weight
+        bias = self.bias
+        with tf.name_scope(self.label):
+            evidences = tf.concat(evidences, axis=1) 
+            scores = tf.matmul(evidences, weight) + bias 
+            scores = tf.math.softmax(scores, axis=-1) # shape (N,num_cpts)
+            cpts = tf.stack(cpts) # shape (num_cpts,U,X)
+            cpt = tf.tensordot(scores, cpts, axes=1)
+            self.tensor = cpt
+
+
+
 
 class TestCPTOpFactory:
 
@@ -766,6 +922,7 @@ class TestCPTOpFactory:
         'linear2': LinearTestCPTOp2,
         'only_bias': LinearTestCPTOpOnlyBias
     }
+
     default_test_fun = 'linear2'
 
     def get(self, test_fun=None):
